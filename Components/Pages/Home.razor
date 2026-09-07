@@ -1,0 +1,91 @@
+﻿@page "/"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AppDbContext Db
+@inject ICurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+<h3>Dashboard</h3>
+
+@if (CurrentUser.IsSuperAdmin)
+{
+    <div class="mb-3">
+        <label for="branch-filter">Branch</label>
+        <select id="branch-filter" class="form-select" style="max-width:250px" @bind="selectedBranchId" @bind:after="LoadAsync">
+            <option value="0">All branches</option>
+            @foreach (var b in branches)
+            {
+                <option value="@b.Id">@b.Name</option>
+            }
+        </select>
+    </div>
+}
+
+<h4>Renewals due in the next 3 days</h4>
+@if (expiring.Count == 0)
+{
+    <p class="text-muted">Nothing due — every membership here has more than 3 days left.</p>
+}
+else
+{
+    <table class="table table-sm">
+        <thead>
+            <tr>
+                <th scope="col">Student</th>
+                <th scope="col">Branch</th>
+                <th scope="col">Expires</th>
+                <th scope="col">Days left</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var m in expiring)
+            {
+                var days = (m.ExpiryDate.Date - DateTime.Today).Days;
+                <tr>
+                    <td>@m.Student.Name</td>
+                    <td>@m.Student.Branch.Name</td>
+                    <td class="num">@m.ExpiryDate.ToShortDateString()</td>
+                    <td><span class="pill @(days <= 1 ? "pill-expired" : "pill-soon")">@(days == 0 ? "Today" : $"{days}d")</span></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<Branch> branches = new();
+    private List<Membership> expiring = new();
+    private int selectedBranchId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (CurrentUser.IsSuperAdmin)
+            branches = await Db.Branches.AsNoTracking().ToListAsync();
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var cutoff = DateTime.Today.AddDays(3);
+        var query = Db.Memberships
+            .Include(m => m.Student).ThenInclude(s => s.Branch)
+            .Where(m => m.ExpiryDate.Date <= cutoff && m.ExpiryDate.Date >= DateTime.Today)
+            .AsNoTracking()
+            .AsQueryable();
+
+        if (CurrentUser.IsSuperAdmin && selectedBranchId != 0)
+            query = query.Where(m => m.Student.BranchId == selectedBranchId);
+
+        expiring = await query.OrderBy(m => m.ExpiryDate).ToListAsync();
+    }
+}

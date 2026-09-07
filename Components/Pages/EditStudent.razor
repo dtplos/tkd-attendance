@@ -1,0 +1,130 @@
+@page "/students/{StudentId:int}/edit"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AppDbContext Db
+@inject ICurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+@if (!loaded)
+{
+    <p>Loading...</p>
+}
+else if (student is null)
+{
+    <p>Student not found, or it's not in your branch.</p>
+}
+else
+{
+    <h3>Edit student</h3>
+
+    <EditForm Model="student" OnValidSubmit="Save">
+        <div class="row g-2">
+            <div class="col-auto">
+                <label for="e-name">Name</label>
+                <InputText id="e-name" class="form-control" @bind-Value="student.Name" />
+            </div>
+            <div class="col-auto">
+                <label for="e-contact">Contact</label>
+                <InputText id="e-contact" class="form-control" @bind-Value="student.Contact" />
+            </div>
+            <div class="col-auto">
+                <label for="e-age">Age</label>
+                <InputNumber id="e-age" class="form-control" @bind-Value="student.Age" style="width:90px" />
+            </div>
+            <div class="col-auto">
+                <label for="e-idnum">ID number</label>
+                <InputText id="e-idnum" class="form-control" @bind-Value="student.IdNumber" />
+            </div>
+            <div class="col-auto">
+                <label for="e-belt">Belt</label>
+                <InputSelect id="e-belt" class="form-select" @bind-Value="student.Belt">
+                    @foreach (var belt in Enum.GetValues<BeltRank>())
+                    {
+                        <option value="@belt">@belt</option>
+                    }
+                </InputSelect>
+            </div>
+            @if (CurrentUser.IsSuperAdmin)
+            {
+                <div class="col-auto">
+                    <label for="e-branch">Branch</label>
+                    <InputSelect id="e-branch" class="form-select" @bind-Value="student.BranchId" @bind:after="OnBranchChanged">
+                        @foreach (var b in branches)
+                        {
+                            <option value="@b.Id">@b.Name</option>
+                        }
+                    </InputSelect>
+                </div>
+            }
+            <div class="col-auto">
+                <label for="e-class">Regular class</label>
+                <select id="e-class" class="form-select" @bind="classDefIdText">
+                    <option value="0">No regular class</option>
+                    @foreach (var c in branchClasses)
+                    {
+                        <option value="@c.Id">@c.Name (@c.DayOfWeek)</option>
+                    }
+                </select>
+            </div>
+        </div>
+        <button class="btn btn-primary mt-3" type="submit">Save</button>
+        <a class="btn btn-secondary mt-3" href="/students">Cancel</a>
+    </EditForm>
+}
+
+@code {
+    [Parameter] public int StudentId { get; set; }
+    private Student? student;
+    private List<Branch> branches = new();
+    private List<ClassDefinition> branchClasses = new();
+    private string classDefIdText = "0";
+    private bool loaded;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (CurrentUser.IsSuperAdmin)
+            branches = await Db.Branches.AsNoTracking().ToListAsync();
+
+        student = await Db.Students.FirstOrDefaultAsync(s => s.Id == StudentId);
+        if (student is not null)
+        {
+            await LoadClassesForBranch(student.BranchId);
+            classDefIdText = student.ClassDefinitionId?.ToString() ?? "0";
+        }
+        loaded = true;
+    }
+
+    private async Task LoadClassesForBranch(int branchId)
+    {
+        branchClasses = (await Db.ClassDefinitions
+            .Where(c => c.BranchId == branchId)
+            .AsNoTracking()
+            .ToListAsync())
+            .OrderBy(c => c.DayOfWeek).ThenBy(c => c.StartTime)
+            .ToList();
+    }
+
+    private async Task OnBranchChanged()
+    {
+        if (student is null) return;
+        await LoadClassesForBranch(student.BranchId);
+        classDefIdText = "0";
+    }
+
+    private async Task Save()
+    {
+        if (student is null) return;
+        student.ClassDefinitionId = classDefIdText == "0" ? null : int.Parse(classDefIdText);
+        await Db.SaveChangesAsync();
+        Nav.NavigateTo("/students");
+    }
+}

@@ -1,0 +1,124 @@
+@page "/students/{StudentId:int}/membership"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+@if (student is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <h3>@student.Name — memberships</h3>
+
+    <table class="table table-sm">
+        <thead>
+            <tr>
+                <th scope="col">Type</th>
+                <th scope="col">Start</th>
+                <th scope="col">Expires</th>
+                <th scope="col">Status</th>
+                <th scope="col">Classes left</th>
+                <th scope="col">Price</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var m in memberships)
+            {
+                var days = (m.ExpiryDate.Date - DateTime.Today).Days;
+                var pillClass = days < 0 ? "pill-expired" : days <= 3 ? "pill-soon" : "pill-active";
+                var pillText = days < 0 ? "Expired" : days <= 3 ? $"{days}d left" : "Active";
+                <tr>
+                    <td>@m.Type</td>
+                    <td class="num">@m.StartDate.ToShortDateString()</td>
+                    <td class="num">@m.ExpiryDate.ToShortDateString()</td>
+                    <td><span class="pill @pillClass">@pillText</span></td>
+                    <td class="num">@(m.ClassesRemaining?.ToString() ?? "-")</td>
+                    <td class="num">@m.Price.ToString("C")</td>
+                    <td><a href="/memberships/@m.Id/edit">Edit</a></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <h4>Add / renew membership</h4>
+    <EditForm Model="newMembership" OnValidSubmit="AddMembership">
+        <div class="row g-2">
+            <div class="col-auto">
+                <label for="mtype">Type</label>
+                <InputSelect id="mtype" class="form-select" @bind-Value="newMembership.Type">
+                    <option value="@MembershipType.Monthly">Monthly</option>
+                    <option value="@MembershipType.ClassPack">Class pack</option>
+                </InputSelect>
+            </div>
+            <div class="col-auto">
+                <label for="mexpiry">Expiry date</label>
+                <InputDate id="mexpiry" class="form-control" @bind-Value="newMembership.ExpiryDate" />
+            </div>
+            @if (newMembership.Type == MembershipType.ClassPack)
+            {
+                <div class="col-auto">
+                    <label for="mclasses">Classes</label>
+                    <InputNumber id="mclasses" class="form-control" @bind-Value="newMembership.ClassesRemaining" />
+                </div>
+            }
+            <div class="col-auto">
+                <label for="mprice">Price paid</label>
+                <InputNumber id="mprice" class="form-control" @bind-Value="newMembership.Price" />
+            </div>
+            <div class="col-auto align-self-end">
+                <button class="btn btn-primary" type="submit">Save</button>
+            </div>
+        </div>
+    </EditForm>
+}
+
+@code {
+    [Parameter] public int StudentId { get; set; }
+
+    private Student? student;
+    private List<Membership> memberships = new();
+    private Membership newMembership = new() { ExpiryDate = DateTime.Today.AddMonths(1) };
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        student = await Db.Students.AsNoTracking().FirstOrDefaultAsync(s => s.Id == StudentId);
+        memberships = await Db.Memberships
+            .Where(m => m.StudentId == StudentId)
+            .OrderByDescending(m => m.ExpiryDate)
+            .AsNoTracking()
+            .ToListAsync();
+    }
+
+    private async Task AddMembership()
+    {
+        newMembership.StudentId = StudentId;
+        newMembership.StartDate = DateTime.Today;
+        if (newMembership.Type == MembershipType.Monthly)
+            newMembership.ClassesRemaining = null;
+
+        Db.Memberships.Add(newMembership);
+        await Db.SaveChangesAsync();
+
+        Db.Payments.Add(new Payment { MembershipId = newMembership.Id, Amount = newMembership.Price, Method = "Cash" });
+        await Db.SaveChangesAsync();
+
+        newMembership = new() { ExpiryDate = DateTime.Today.AddMonths(1) };
+        await LoadAsync();
+    }
+}

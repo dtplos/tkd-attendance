@@ -1,0 +1,248 @@
+@page "/reports/history"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AppDbContext Db
+@inject ICurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+<h3>Attendance history</h3>
+
+<div class="row g-2 mb-3">
+    @if (CurrentUser.IsSuperAdmin)
+    {
+        <div class="col-auto">
+            <label for="branch-select">Branch</label>
+            <select id="branch-select" class="form-select" @bind="selectedBranchId" @bind:after="LoadAsync">
+                @foreach (var b in branches)
+                {
+                    <option value="@b.Id">@b.Name</option>
+                }
+            </select>
+        </div>
+    }
+    <div class="col-auto">
+        <label for="period-select">View by</label>
+        <select id="period-select" class="form-select" @bind="periodType" @bind:after="LoadAsync">
+            <option value="day">Day</option>
+            <option value="month">Month</option>
+            <option value="year">Year</option>
+            <option value="range">Date range</option>
+        </select>
+    </div>
+
+    @if (periodType == "day")
+    {
+        <div class="col-auto">
+            <label for="day-picker">Date</label>
+            <input id="day-picker" type="date" class="form-control" @bind="selectedDate" @bind:after="LoadAsync" />
+        </div>
+    }
+    else if (periodType == "month")
+    {
+        <div class="col-auto">
+            <label for="month-picker">Month</label>
+            <select id="month-picker" class="form-select" @bind="selectedMonth" @bind:after="LoadAsync">
+                @for (var m = 1; m <= 12; m++)
+                {
+                    <option value="@m">@System.Globalization.CultureInfo.InvariantCulture.DateTimeFormat.GetMonthName(m)</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto">
+            <label for="year-picker-m">Year</label>
+            <input id="year-picker-m" type="number" class="form-control" style="width:110px" @bind="selectedYear" @bind:after="LoadAsync" />
+        </div>
+    }
+    else if (periodType == "year")
+    {
+        <div class="col-auto">
+            <label for="year-picker-y">Year</label>
+            <input id="year-picker-y" type="number" class="form-control" style="width:110px" @bind="selectedYear" @bind:after="LoadAsync" />
+        </div>
+    }
+    else
+    {
+        <div class="col-auto">
+            <label for="range-start">From</label>
+            <input id="range-start" type="date" class="form-control" @bind="rangeStart" @bind:after="LoadAsync" />
+        </div>
+        <div class="col-auto">
+            <label for="range-end">To</label>
+            <input id="range-end" type="date" class="form-control" @bind="rangeEnd" @bind:after="LoadAsync" />
+        </div>
+    }
+</div>
+
+@if (loaded)
+{
+    <p><strong>Total attendances: @grandTotal</strong></p>
+
+    @if (periodType == "day")
+    {
+        @if (classBreakdown.Count == 0)
+        {
+            <p class="text-muted">No attendance recorded for this date.</p>
+        }
+        else
+        {
+            <table class="table table-sm">
+                <thead>
+                    <tr><th scope="col">Class</th><th scope="col">Present</th><th scope="col">Students</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in classBreakdown)
+                    {
+                        <tr>
+                            <td>@row.Label</td>
+                            <td class="num">@row.Count</td>
+                            <td>@string.Join(", ", row.Names)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    }
+    else
+    {
+        @if (timeBreakdown.Count == 0)
+        {
+            <p class="text-muted">No attendance recorded in this period.</p>
+        }
+        else
+        {
+            <table class="table table-sm">
+                <thead><tr><th scope="col">@(periodType == "year" ? "Month" : "Date")</th><th scope="col">Total</th></tr></thead>
+                <tbody>
+                    @foreach (var row in timeBreakdown)
+                    {
+                        <tr><td>@row.Label</td><td class="num">@row.Count</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        @if (classBreakdown.Count > 0)
+        {
+            <h4>By class</h4>
+            <table class="table table-sm">
+                <thead><tr><th scope="col">Class</th><th scope="col">Total</th></tr></thead>
+                <tbody>
+                    @foreach (var row in classBreakdown)
+                    {
+                        <tr><td>@row.Label</td><td class="num">@row.Count</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+    }
+}
+
+@code {
+    private List<Branch> branches = new();
+    private int selectedBranchId;
+    private string periodType = "day";
+    private DateTime selectedDate = DateTime.Today;
+    private int selectedMonth = DateTime.Today.Month;
+    private int selectedYear = DateTime.Today.Year;
+    private DateTime rangeStart = DateTime.Today.AddDays(-7);
+    private DateTime rangeEnd = DateTime.Today;
+
+    private bool loaded;
+    private int grandTotal;
+    private List<Row> classBreakdown = new();
+    private List<Row> timeBreakdown = new();
+
+    private record Row(string Label, int Count, List<string> Names);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (CurrentUser.IsSuperAdmin)
+        {
+            branches = await Db.Branches.AsNoTracking().ToListAsync();
+            selectedBranchId = branches.FirstOrDefault()?.Id ?? 0;
+        }
+        else
+        {
+            selectedBranchId = CurrentUser.BranchId ?? 0;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        DateTime start, end;
+        if (periodType == "day")
+        {
+            start = selectedDate.Date;
+            end = start.AddDays(1);
+        }
+        else if (periodType == "month")
+        {
+            start = new DateTime(selectedYear, selectedMonth, 1);
+            end = start.AddMonths(1);
+        }
+        else if (periodType == "year")
+        {
+            start = new DateTime(selectedYear, 1, 1);
+            end = start.AddYears(1);
+        }
+        else
+        {
+            start = rangeStart.Date;
+            end = (rangeEnd.Date < start ? start : rangeEnd.Date).AddDays(1);
+        }
+
+        var raw = await Db.AttendanceRecords
+            .Where(a => a.ClassSession.BranchId == selectedBranchId
+                     && a.ClassSession.Date >= start && a.ClassSession.Date < end)
+            .Select(a => new
+            {
+                Date = a.ClassSession.Date,
+                ClassName = a.ClassSession.ClassDefinition != null ? a.ClassSession.ClassDefinition.Name : "Unscheduled",
+                StudentName = a.Student.Name
+            })
+            .AsNoTracking()
+            .ToListAsync();
+
+        grandTotal = raw.Count;
+
+        classBreakdown = raw
+            .GroupBy(r => r.ClassName)
+            .Select(g => new Row(g.Key, g.Count(), g.Select(x => x.StudentName).OrderBy(n => n).ToList()))
+            .OrderByDescending(r => r.Count)
+            .ToList();
+
+        if (periodType == "month" || periodType == "range")
+        {
+            timeBreakdown = raw
+                .GroupBy(r => r.Date.Date)
+                .OrderBy(g => g.Key)
+                .Select(g => new Row(g.Key.ToString("ddd d MMM"), g.Count(), new List<string>()))
+                .ToList();
+        }
+        else if (periodType == "year")
+        {
+            timeBreakdown = raw
+                .GroupBy(r => r.Date.Month)
+                .OrderBy(g => g.Key)
+                .Select(g => new Row(System.Globalization.CultureInfo.InvariantCulture.DateTimeFormat.GetMonthName(g.Key), g.Count(), new List<string>()))
+                .ToList();
+        }
+        else
+        {
+            timeBreakdown = new();
+        }
+
+        loaded = true;
+    }
+}

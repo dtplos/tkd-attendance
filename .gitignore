@@ -1,0 +1,18 @@
+# Build results
+bin/
+obj/
+
+# Editor / IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Local SQLite database — each machine builds its own via migrations + seed data
+*.db
+*.db-shm
+*.db-wal
+
+# OS junk
+.DS_Store
+Thumbs.db

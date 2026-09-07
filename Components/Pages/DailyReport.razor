@@ -1,0 +1,161 @@
+@page "/reports/daily"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AppDbContext Db
+@inject ICurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+<div class="no-print">
+    <h3>Daily report</h3>
+    <div class="row g-2 mb-3">
+        @if (CurrentUser.IsSuperAdmin)
+        {
+            <div class="col-auto">
+                <label for="branch-select">Branch</label>
+                <select id="branch-select" class="form-select" @bind="selectedBranchId" @bind:after="LoadAsync">
+                    @foreach (var b in branches)
+                    {
+                        <option value="@b.Id">@b.Name</option>
+                    }
+                </select>
+            </div>
+        }
+        <div class="col-auto">
+            <label for="report-date">Date</label>
+            <input id="report-date" type="date" class="form-control" @bind="reportDate" @bind:after="LoadAsync" />
+        </div>
+        <div class="col-auto align-self-end">
+            <button class="btn btn-secondary" type="button" onclick="window.print()">Print / save as PDF</button>
+        </div>
+    </div>
+</div>
+
+@if (branchName is not null)
+{
+    <div class="report">
+        <h3>@branchName — daily report</h3>
+        <p class="text-muted">@reportDate.ToLongDateString()</p>
+
+        <h4>New signups</h4>
+        @if (newSignups.Count == 0)
+        {
+            <p class="text-muted">None today.</p>
+        }
+        else
+        {
+            <ul>
+                @foreach (var s in newSignups)
+                {
+                    <li>@s.Name (@s.Belt belt)</li>
+                }
+            </ul>
+        }
+
+        <h4>Attendance by class</h4>
+        @if (classRows.Count == 0)
+        {
+            <p class="text-muted">No classes scheduled for this branch on this day.</p>
+        }
+        else
+        {
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th scope="col">Class</th>
+                        <th scope="col">Time</th>
+                        <th scope="col">Present</th>
+                        <th scope="col">Students</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in classRows)
+                    {
+                        <tr>
+                            <td>@row.ClassName</td>
+                            <td class="num">@row.TimeRange</td>
+                            <td class="num">@row.Names.Count</td>
+                            <td>@string.Join(", ", row.Names)</td>
+                        </tr>
+                    }
+                </tbody>
+                <tfoot>
+                    <tr>
+                        <td colspan="2"><strong>Total</strong></td>
+                        <td class="num"><strong>@classRows.Sum(r => r.Names.Count)</strong></td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        }
+    </div>
+}
+
+@code {
+    private List<Branch> branches = new();
+    private int selectedBranchId;
+    private DateTime reportDate = DateTime.Today;
+    private string? branchName;
+    private List<Student> newSignups = new();
+    private List<ClassRow> classRows = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (CurrentUser.IsSuperAdmin)
+        {
+            branches = await Db.Branches.AsNoTracking().ToListAsync();
+            selectedBranchId = branches.FirstOrDefault()?.Id ?? 0;
+        }
+        else
+        {
+            selectedBranchId = CurrentUser.BranchId ?? 0;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var branch = await Db.Branches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == selectedBranchId);
+        branchName = branch?.Name;
+        if (branch is null) return;
+
+        newSignups = await Db.Students
+            .Where(s => s.BranchId == selectedBranchId && s.JoinDate.Date == reportDate.Date)
+            .OrderBy(s => s.Name)
+            .AsNoTracking()
+            .ToListAsync();
+
+        var defs = (await Db.ClassDefinitions
+            .Where(c => c.BranchId == selectedBranchId && c.DayOfWeek == reportDate.DayOfWeek)
+            .AsNoTracking()
+            .ToListAsync())
+            .OrderBy(c => c.StartTime)
+            .ToList();
+
+        classRows = new List<ClassRow>();
+        foreach (var def in defs)
+        {
+            var names = await Db.AttendanceRecords
+                .Where(a => a.ClassSession.ClassDefinitionId == def.Id && a.ClassSession.Date == reportDate.Date)
+                .Select(a => a.Student.Name)
+                .OrderBy(n => n)
+                .AsNoTracking()
+                .ToListAsync();
+
+            classRows.Add(new ClassRow(def.Name, $"{FormatTime(def.StartTime)}–{FormatTime(def.EndTime)}", names));
+        }
+    }
+
+    private static string FormatTime(TimeSpan t) => DateTime.Today.Add(t).ToString("h:mm tt");
+
+    private record ClassRow(string ClassName, string TimeRange, List<string> Names);
+}

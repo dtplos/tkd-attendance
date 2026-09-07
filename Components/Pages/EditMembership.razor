@@ -1,0 +1,81 @@
+@page "/memberships/{MembershipId:int}/edit"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+@if (!loaded)
+{
+    <p>Loading...</p>
+}
+else if (membership is null)
+{
+    <p>Membership not found, or it's not in your branch.</p>
+}
+else
+{
+    <h3>Edit membership — @membership.Student.Name</h3>
+
+    <EditForm Model="membership" OnValidSubmit="Save">
+        <div class="row g-2">
+            <div class="col-auto">
+                <label for="m-type">Type</label>
+                <InputSelect id="m-type" class="form-select" @bind-Value="membership.Type">
+                    <option value="@MembershipType.Monthly">Monthly</option>
+                    <option value="@MembershipType.ClassPack">Class pack</option>
+                </InputSelect>
+            </div>
+            <div class="col-auto">
+                <label for="m-start">Start date</label>
+                <InputDate id="m-start" class="form-control" @bind-Value="membership.StartDate" />
+            </div>
+            <div class="col-auto">
+                <label for="m-expiry">Expiry date</label>
+                <InputDate id="m-expiry" class="form-control" @bind-Value="membership.ExpiryDate" />
+            </div>
+            @if (membership.Type == MembershipType.ClassPack)
+            {
+                <div class="col-auto">
+                    <label for="m-classes">Classes left</label>
+                    <InputNumber id="m-classes" class="form-control" @bind-Value="membership.ClassesRemaining" />
+                </div>
+            }
+            <div class="col-auto">
+                <label for="m-price">Price</label>
+                <InputNumber id="m-price" class="form-control" @bind-Value="membership.Price" />
+            </div>
+        </div>
+        <button class="btn btn-primary mt-3" type="submit">Save</button>
+        <a class="btn btn-secondary mt-3" href="/students/@membership.StudentId/membership">Cancel</a>
+    </EditForm>
+}
+
+@code {
+    [Parameter] public int MembershipId { get; set; }
+    private Membership? membership;
+    private bool loaded;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        membership = await Db.Memberships.Include(m => m.Student)
+            .FirstOrDefaultAsync(m => m.Id == MembershipId);
+        loaded = true;
+    }
+
+    private async Task Save()
+    {
+        if (membership is null) return;
+        membership.RenewalNotifiedAt = null;
+        await Db.SaveChangesAsync();
+        Nav.NavigateTo($"/students/{membership.StudentId}/membership");
+    }
+}

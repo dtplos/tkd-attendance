@@ -1,0 +1,186 @@
+@page "/attendance"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AppDbContext Db
+@inject ICurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+<h3>Attendance — @DateTime.Today.ToShortDateString() (@DateTime.Today.DayOfWeek)</h3>
+
+@if (CurrentUser.IsSuperAdmin)
+{
+    <div class="mb-3">
+        <label for="branch-select">Branch</label>
+        <select id="branch-select" class="form-select" style="max-width:250px" @bind="selectedBranchId" @bind:after="LoadClassesAsync">
+            @foreach (var b in branches)
+            {
+                <option value="@b.Id">@b.Name</option>
+            }
+        </select>
+    </div>
+}
+
+@if (todaysClasses.Count == 0)
+{
+    <p class="text-muted">No classes scheduled for this branch today. Set them up on the <a href="/classes">class schedule</a> page.</p>
+}
+else
+{
+    <div class="mb-3">
+        <label for="class-select">Class</label>
+        <select id="class-select" class="form-select" style="max-width:320px" @bind="selectedClassId" @bind:after="LoadStudentsAsync">
+            @foreach (var c in todaysClasses)
+            {
+                <option value="@c.Id">@c.Name (@FormatTime(c.StartTime)–@FormatTime(c.EndTime))</option>
+            }
+        </select>
+    </div>
+
+    <div class="sr-status" aria-live="polite">@liveMessage</div>
+
+    @if (students is not null)
+    {
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th scope="col">Student</th>
+                    <th scope="col">Belt</th>
+                    <th scope="col">Present</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in students)
+                {
+                    <tr>
+                        <td>@s.Name</td>
+                        <td>@s.Belt</td>
+                        <td>
+                            <input type="checkbox" checked="@checkedIn.Contains(s.Id)"
+                                   aria-label="Mark @s.Name present"
+                                   @onchange="e => ToggleAsync(s.Id, s.Name, (bool)e.Value!)" />
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<Branch> branches = new();
+    private List<ClassDefinition> todaysClasses = new();
+    private List<Student>? students;
+    private HashSet<int> checkedIn = new();
+    private int selectedBranchId;
+    private int selectedClassId;
+    private int sessionId;
+    private string liveMessage = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (CurrentUser.IsSuperAdmin)
+        {
+            branches = await Db.Branches.AsNoTracking().ToListAsync();
+            selectedBranchId = branches.FirstOrDefault()?.Id ?? 0;
+        }
+        else
+        {
+            selectedBranchId = CurrentUser.BranchId ?? 0;
+        }
+
+        await LoadClassesAsync();
+    }
+
+    private async Task LoadClassesAsync()
+    {
+        var today = DateTime.Today.DayOfWeek;
+        todaysClasses = (await Db.ClassDefinitions
+            .Where(c => c.BranchId == selectedBranchId && c.DayOfWeek == today)
+            .AsNoTracking()
+            .ToListAsync())
+            .OrderBy(c => c.StartTime)
+            .ToList();
+
+        if (todaysClasses.Count > 0)
+        {
+            selectedClassId = todaysClasses[0].Id;
+            await LoadStudentsAsync();
+        }
+        else
+        {
+            students = null;
+        }
+    }
+
+    private async Task LoadStudentsAsync()
+    {
+        var today = DateTime.Today;
+
+        var session = await Db.ClassSessions
+            .FirstOrDefaultAsync(c => c.ClassDefinitionId == selectedClassId && c.Date == today);
+
+        if (session is null)
+        {
+            var def = todaysClasses.First(c => c.Id == selectedClassId);
+            session = new ClassSession
+            {
+                BranchId = selectedBranchId,
+                ClassDefinitionId = selectedClassId,
+                Date = today,
+                Time = def.StartTime
+            };
+            Db.ClassSessions.Add(session);
+            await Db.SaveChangesAsync();
+        }
+        sessionId = session.Id;
+
+        students = await Db.Students
+            .Where(s => s.BranchId == selectedBranchId)
+            .OrderBy(s => s.Name)
+            .AsNoTracking()
+            .ToListAsync();
+
+        checkedIn = (await Db.AttendanceRecords
+            .Where(a => a.ClassSessionId == sessionId)
+            .Select(a => a.StudentId)
+            .ToListAsync())
+            .ToHashSet();
+    }
+
+    private async Task ToggleAsync(int studentId, string name, bool present)
+    {
+        if (present)
+        {
+            if (!checkedIn.Contains(studentId))
+            {
+                Db.AttendanceRecords.Add(new AttendanceRecord { StudentId = studentId, ClassSessionId = sessionId });
+                await Db.SaveChangesAsync();
+                checkedIn.Add(studentId);
+                liveMessage = $"{name} marked present";
+            }
+        }
+        else
+        {
+            var record = await Db.AttendanceRecords
+                .FirstOrDefaultAsync(a => a.StudentId == studentId && a.ClassSessionId == sessionId);
+            if (record is not null)
+            {
+                Db.AttendanceRecords.Remove(record);
+                await Db.SaveChangesAsync();
+                checkedIn.Remove(studentId);
+                liveMessage = $"{name} marked absent";
+            }
+        }
+    }
+
+    private static string FormatTime(TimeSpan t) => DateTime.Today.Add(t).ToString("h:mm tt");
+}

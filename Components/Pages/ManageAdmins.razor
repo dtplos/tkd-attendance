@@ -1,0 +1,197 @@
+@page "/admins"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Cryptography
+@using TkdAttendance.Jobs
+@inject AppDbContext Db
+@inject UserManager<ApplicationUser> UserManager
+@inject ICurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+@inject RenewalReminderJob ReminderJob
+
+@if (!CurrentUser.IsSuperAdmin)
+{
+    <p>Not authorized.</p>
+}
+else
+{
+    <div class="mb-4" style="border:1px solid var(--line);border-radius:var(--radius);padding:1rem">
+        <h4>Renewal reminders</h4>
+        <p class="text-muted">Runs automatically every day at 8am Singapore time. Use this to check right now instead of waiting.</p>
+        <button class="btn btn-secondary" type="button" @onclick="RunReminderCheck">Run renewal check now</button>
+        @if (reminderResult is not null)
+        {
+            <p class="mt-2" role="status">@reminderResult</p>
+        }
+    </div>
+
+    <h3>Branch admins</h3>
+
+    @if (resetPasswordFor is not null)
+    {
+        <div class="mb-3" role="alert" style="border:1px solid var(--line);border-radius:var(--radius);padding:1rem;background:var(--gold-bg)">
+            New password for <strong>@resetPasswordFor</strong>: <code>@resetPasswordValue</code>
+            <br /><small>Copy this now and send it to them directly — it won't be shown again. They can set their own password afterward under "Change password".</small>
+        </div>
+    }
+
+    <table class="table table-sm">
+        <thead>
+            <tr>
+                <th scope="col">Email</th>
+                <th scope="col">Branch</th>
+                <th scope="col">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var a in admins)
+            {
+                <tr>
+                    <td>@a.Email</td>
+                    <td>@(branches.FirstOrDefault(b => b.Id == a.BranchId)?.Name ?? "-")</td>
+                    <td>
+                        <button class="btn btn-sm btn-secondary" type="button" @onclick="() => ResetPasswordAsync(a)">Reset password</button>
+                        @if (pendingDeleteId == a.Id)
+                        {
+                            <button class="btn btn-sm" type="button" style="background:var(--red-bg);color:var(--red-ink);border:1px solid var(--red-ink)" @onclick="() => ConfirmRemoveAsync(a)">Confirm remove?</button>
+                            <button class="btn btn-sm btn-secondary" type="button" @onclick="() => pendingDeleteId = null">Cancel</button>
+                        }
+                        else
+                        {
+                            <button class="btn btn-sm btn-secondary" type="button" @onclick="() => pendingDeleteId = a.Id">Remove</button>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <h4>Add branch admin</h4>
+    <EditForm Model="newAdmin" OnValidSubmit="AddAdmin">
+        <div class="row g-2">
+            <div class="col-auto">
+                <label for="admin-email" class="visually-hidden">Email</label>
+                <InputText id="admin-email" class="form-control" placeholder="Email" @bind-Value="newAdmin.Email" />
+            </div>
+            <div class="col-auto">
+                <label for="admin-password" class="visually-hidden">Password</label>
+                <InputText id="admin-password" type="password" class="form-control" placeholder="Password" @bind-Value="newAdmin.Password" />
+            </div>
+            <div class="col-auto">
+                <label for="admin-branch" class="visually-hidden">Branch</label>
+                <select id="admin-branch" class="form-select" @bind="newAdmin.BranchId">
+                    @foreach (var b in branches)
+                    {
+                        <option value="@b.Id">@b.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="col-auto"><button class="btn btn-primary" type="submit">Create</button></div>
+        </div>
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <p class="text-danger mt-2" role="alert">@error</p>
+        }
+    </EditForm>
+}
+
+@code {
+    private List<Branch> branches = new();
+    private List<ApplicationUser> admins = new();
+    private NewAdminInput newAdmin = new();
+    private string? error;
+    private string? resetPasswordFor;
+    private string? resetPasswordValue;
+    private string? reminderResult;
+    private string? pendingDeleteId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        branches = await Db.Branches.AsNoTracking().ToListAsync();
+        newAdmin.BranchId = branches.FirstOrDefault()?.Id ?? 0;
+        await LoadAdmins();
+    }
+
+    private async Task LoadAdmins()
+    {
+        admins = await UserManager.Users.Where(u => u.BranchId != null).ToListAsync();
+    }
+
+    private async Task RunReminderCheck()
+    {
+        var count = await ReminderJob.RunAsync();
+        reminderResult = count == 0
+            ? "No new renewals due — nothing to notify."
+            : $"Notified branch admins about {count} student(s) renewing soon.";
+    }
+
+    private async Task AddAdmin()
+    {
+        error = null;
+        var user = new ApplicationUser { UserName = newAdmin.Email, Email = newAdmin.Email, EmailConfirmed = true, BranchId = newAdmin.BranchId };
+        var result = await UserManager.CreateAsync(user, newAdmin.Password);
+        if (result.Succeeded)
+        {
+            await UserManager.AddToRoleAsync(user, "BranchAdmin");
+            newAdmin = new() { BranchId = branches.FirstOrDefault()?.Id ?? 0 };
+            await LoadAdmins();
+        }
+        else
+        {
+            error = string.Join(", ", result.Errors.Select(e => e.Description));
+        }
+    }
+
+    private async Task ResetPasswordAsync(ApplicationUser admin)
+    {
+        error = null;
+        var newPassword = GenerateTempPassword();
+        var token = await UserManager.GeneratePasswordResetTokenAsync(admin);
+        var result = await UserManager.ResetPasswordAsync(admin, token, newPassword);
+
+        if (result.Succeeded)
+        {
+            resetPasswordFor = admin.Email;
+            resetPasswordValue = newPassword;
+        }
+        else
+        {
+            error = string.Join(", ", result.Errors.Select(e => e.Description));
+        }
+    }
+
+    private async Task ConfirmRemoveAsync(ApplicationUser admin)
+    {
+        error = null;
+        var result = await UserManager.DeleteAsync(admin);
+        if (!result.Succeeded)
+            error = string.Join(", ", result.Errors.Select(e => e.Description));
+
+        pendingDeleteId = null;
+        await LoadAdmins();
+    }
+
+    private static string GenerateTempPassword()
+    {
+        const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$";
+        var bytes = RandomNumberGenerator.GetBytes(12);
+        return new string(bytes.Select(b => chars[b % chars.Length]).ToArray());
+    }
+
+    private class NewAdminInput
+    {
+        public string Email { get; set; } = "";
+        public string Password { get; set; } = "";
+        public int BranchId { get; set; }
+    }
+}

@@ -1,0 +1,209 @@
+@page "/students"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AppDbContext Db
+@inject ICurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+<h3>Students</h3>
+
+@if (CurrentUser.IsSuperAdmin)
+{
+    <div class="mb-3">
+        <label for="branch-select">Branch</label>
+        <select id="branch-select" class="form-select" style="max-width:250px" @bind="selectedBranchId" @bind:after="LoadStudents">
+            @foreach (var b in branches)
+            {
+                <option value="@b.Id">@b.Name</option>
+            }
+        </select>
+    </div>
+}
+
+<div class="row g-2 mb-3">
+    <div class="col-auto">
+        <label for="search-name">Search by name</label>
+        <input id="search-name" class="form-control" placeholder="Type a name..." @bind="searchName" @bind:event="oninput" />
+    </div>
+    <div class="col-auto">
+        <label for="filter-belt">Belt</label>
+        <select id="filter-belt" class="form-select" @bind="filterBelt">
+            <option value="">All belts</option>
+            @foreach (var belt in Enum.GetValues<BeltRank>())
+            {
+                <option value="@belt">@belt</option>
+            }
+        </select>
+    </div>
+    <div class="col-auto">
+        <label for="filter-class">Class</label>
+        <select id="filter-class" class="form-select" @bind="filterClassId">
+            <option value="0">All classes</option>
+            @foreach (var c in branchClasses)
+            {
+                <option value="@c.Id">@c.Name (@c.DayOfWeek)</option>
+            }
+        </select>
+    </div>
+</div>
+
+<table class="table table-sm">
+    <thead>
+        <tr>
+            <th scope="col">Name</th>
+            <th scope="col">Age</th>
+            <th scope="col">ID number</th>
+            <th scope="col">Belt</th>
+            <th scope="col">Class</th>
+            <th scope="col">Membership expires</th>
+            <th scope="col">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var s in FilteredStudents)
+        {
+            <tr>
+                <td>@s.Name</td>
+                <td class="num">@(s.Age?.ToString() ?? "-")</td>
+                <td>@(s.IdNumber ?? "-")</td>
+                <td><span class="belt-dot" style="background:@BeltColor(s.Belt)"></span>@s.Belt</td>
+                <td>@(s.ClassDefinition is null ? "-" : $"{s.ClassDefinition.Name} ({s.ClassDefinition.DayOfWeek})")</td>
+                <td class="num">@(s.Memberships.OrderByDescending(m => m.ExpiryDate).FirstOrDefault()?.ExpiryDate.ToShortDateString() ?? "-")</td>
+                <td>
+                    <a href="/students/@s.Id/edit">Edit</a>
+                    &nbsp;|&nbsp;
+                    <a href="/students/@s.Id/membership">Membership</a>
+                </td>
+            </tr>
+        }
+        @if (!FilteredStudents.Any())
+        {
+            <tr><td colspan="7" class="text-muted">No students match this search.</td></tr>
+        }
+    </tbody>
+</table>
+
+<h4>Add student</h4>
+<EditForm Model="newStudent" OnValidSubmit="AddStudent">
+    <div class="row g-2">
+        <div class="col-auto">
+            <label for="new-name" class="visually-hidden">Name</label>
+            <InputText id="new-name" class="form-control" placeholder="Name" @bind-Value="newStudent.Name" />
+        </div>
+        <div class="col-auto">
+            <label for="new-contact" class="visually-hidden">Contact</label>
+            <InputText id="new-contact" class="form-control" placeholder="Contact" @bind-Value="newStudent.Contact" />
+        </div>
+        <div class="col-auto">
+            <label for="new-age" class="visually-hidden">Age</label>
+            <InputNumber id="new-age" class="form-control" placeholder="Age" @bind-Value="newStudent.Age" style="width:90px" />
+        </div>
+        <div class="col-auto">
+            <label for="new-idnum" class="visually-hidden">ID number</label>
+            <InputText id="new-idnum" class="form-control" placeholder="ID number" @bind-Value="newStudent.IdNumber" />
+        </div>
+        <div class="col-auto">
+            <label for="new-belt" class="visually-hidden">Belt</label>
+            <InputSelect id="new-belt" class="form-select" @bind-Value="newStudent.Belt">
+                @foreach (var belt in Enum.GetValues<BeltRank>())
+                {
+                    <option value="@belt">@belt</option>
+                }
+            </InputSelect>
+        </div>
+        <div class="col-auto">
+            <label for="new-class" class="visually-hidden">Regular class</label>
+            <select id="new-class" class="form-select" @bind="newStudentClassId">
+                <option value="0">No regular class</option>
+                @foreach (var c in branchClasses)
+                {
+                    <option value="@c.Id">@c.Name (@c.DayOfWeek)</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto"><button class="btn btn-primary" type="submit">Add student</button></div>
+    </div>
+</EditForm>
+
+@code {
+    private List<Branch> branches = new();
+    private List<Student> students = new();
+    private List<ClassDefinition> branchClasses = new();
+    private int selectedBranchId;
+    private Student newStudent = new();
+    private int newStudentClassId;
+
+    private string searchName = "";
+    private string filterBelt = "";
+    private int filterClassId;
+
+    private IEnumerable<Student> FilteredStudents =>
+        students.Where(s =>
+            (string.IsNullOrWhiteSpace(searchName) || s.Name.Contains(searchName, StringComparison.OrdinalIgnoreCase)) &&
+            (string.IsNullOrEmpty(filterBelt) || s.Belt.ToString() == filterBelt) &&
+            (filterClassId == 0 || s.ClassDefinitionId == filterClassId));
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (CurrentUser.IsSuperAdmin)
+        {
+            branches = await Db.Branches.AsNoTracking().ToListAsync();
+            selectedBranchId = branches.FirstOrDefault()?.Id ?? 0;
+        }
+        else
+        {
+            selectedBranchId = CurrentUser.BranchId ?? 0;
+        }
+        await LoadStudents();
+    }
+
+    private async Task LoadStudents()
+    {
+        var query = Db.Students
+            .Include(s => s.Memberships)
+            .Include(s => s.ClassDefinition)
+            .AsNoTracking()
+            .AsQueryable();
+        if (CurrentUser.IsSuperAdmin)
+            query = query.Where(s => s.BranchId == selectedBranchId);
+        students = await query.OrderBy(s => s.Name).ToListAsync();
+
+        branchClasses = (await Db.ClassDefinitions
+            .Where(c => c.BranchId == selectedBranchId)
+            .AsNoTracking()
+            .ToListAsync())
+            .OrderBy(c => c.DayOfWeek).ThenBy(c => c.StartTime)
+            .ToList();
+
+        filterClassId = 0;
+    }
+
+    private async Task AddStudent()
+    {
+        if (string.IsNullOrWhiteSpace(newStudent.Name)) return;
+
+        newStudent.BranchId = CurrentUser.IsSuperAdmin ? selectedBranchId : (CurrentUser.BranchId ?? 0);
+        newStudent.JoinDate = DateTime.Today;
+        newStudent.ClassDefinitionId = newStudentClassId == 0 ? null : newStudentClassId;
+
+        Db.Students.Add(newStudent);
+        await Db.SaveChangesAsync();
+
+        newStudent = new();
+        newStudentClassId = 0;
+        await LoadStudents();
+    }
+
+    private static string BeltColor(BeltRank belt) => belt switch
+    {
+        BeltRank.White => "#FFFFFF",
+        BeltRank.Yellow => "#F5D90A",
+        BeltRank.Green => "#2E8B37",
+        BeltRank.Blue => "#1D5FAE",
+        BeltRank.Red => "#C8102E",
+        BeltRank.Black => "#1B1B1B",
+        _ => "#CCCCCC"
+    };
+}

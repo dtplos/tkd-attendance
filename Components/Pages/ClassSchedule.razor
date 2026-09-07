@@ -1,0 +1,158 @@
+@page "/classes"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AppDbContext Db
+@inject ICurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+<h3>Class schedule</h3>
+
+@if (CurrentUser.IsSuperAdmin)
+{
+    <div class="mb-3">
+        <label for="branch-select">Branch</label>
+        <select id="branch-select" class="form-select" style="max-width:250px" @bind="selectedBranchId" @bind:after="LoadAsync">
+            @foreach (var b in branches)
+            {
+                <option value="@b.Id">@b.Name</option>
+            }
+        </select>
+    </div>
+}
+
+<table class="table table-sm">
+    <thead>
+        <tr>
+            <th scope="col">Day</th>
+            <th scope="col">Class</th>
+            <th scope="col">Time</th>
+            <th scope="col">Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var c in classes)
+        {
+            <tr>
+                <td>@c.DayOfWeek</td>
+                <td>@c.Name</td>
+                <td class="num">@FormatTime(c.StartTime) – @FormatTime(c.EndTime)</td>
+                <td><button class="btn btn-sm btn-secondary" type="button" @onclick="() => DeleteAsync(c)">Remove</button></td>
+            </tr>
+        }
+        @if (classes.Count == 0)
+        {
+            <tr><td colspan="4" class="text-muted">No classes set up for this branch yet.</td></tr>
+        }
+    </tbody>
+</table>
+
+<h4>Add class</h4>
+<EditForm Model="newClass" OnValidSubmit="AddClass">
+    <div class="row g-2">
+        <div class="col-auto">
+            <label for="c-name">Class name</label>
+            <InputText id="c-name" class="form-control" placeholder="e.g. Kids" @bind-Value="newClass.Name" />
+        </div>
+        <div class="col-auto">
+            <label for="c-day">Day</label>
+            <InputSelect id="c-day" class="form-select" @bind-Value="newClass.DayOfWeek">
+                @foreach (var day in Enum.GetValues<DayOfWeek>())
+                {
+                    <option value="@day">@day</option>
+                }
+            </InputSelect>
+        </div>
+        <div class="col-auto">
+            <label for="c-start">Start time</label>
+            <input id="c-start" type="time" class="form-control" @bind="startTime" />
+        </div>
+        <div class="col-auto">
+            <label for="c-end">End time</label>
+            <input id="c-end" type="time" class="form-control" @bind="endTime" />
+        </div>
+        <div class="col-auto align-self-end"><button class="btn btn-primary" type="submit">Add</button></div>
+    </div>
+    @if (!string.IsNullOrEmpty(error))
+    {
+        <p class="text-danger mt-2" role="alert">@error</p>
+    }
+</EditForm>
+
+@code {
+    private List<Branch> branches = new();
+    private List<ClassDefinition> classes = new();
+    private int selectedBranchId;
+    private ClassDefinition newClass = new();
+    private TimeOnly? startTime = new TimeOnly(16, 0);
+    private TimeOnly? endTime = new TimeOnly(17, 0);
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (CurrentUser.IsSuperAdmin)
+        {
+            branches = await Db.Branches.AsNoTracking().ToListAsync();
+            selectedBranchId = branches.FirstOrDefault()?.Id ?? 0;
+        }
+        else
+        {
+            selectedBranchId = CurrentUser.BranchId ?? 0;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        classes = (await Db.ClassDefinitions
+            .Where(c => c.BranchId == selectedBranchId)
+            .AsNoTracking()
+            .ToListAsync())
+            .OrderBy(c => c.DayOfWeek).ThenBy(c => c.StartTime)
+            .ToList();
+    }
+
+    private async Task AddClass()
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(newClass.Name) || startTime is null || endTime is null || endTime <= startTime)
+        {
+            error = "Enter a class name and a valid start/end time (end must be after start).";
+            return;
+        }
+
+        newClass.BranchId = selectedBranchId;
+        newClass.StartTime = startTime.Value.ToTimeSpan();
+        newClass.EndTime = endTime.Value.ToTimeSpan();
+
+        Db.ClassDefinitions.Add(newClass);
+        await Db.SaveChangesAsync();
+
+        newClass = new();
+        startTime = new TimeOnly(16, 0);
+        endTime = new TimeOnly(17, 0);
+        await LoadAsync();
+    }
+
+    private async Task DeleteAsync(ClassDefinition c)
+    {
+        var tracked = await Db.ClassDefinitions.FindAsync(c.Id);
+        if (tracked is not null)
+        {
+            Db.ClassDefinitions.Remove(tracked);
+            await Db.SaveChangesAsync();
+        }
+        await LoadAsync();
+    }
+
+    private static string FormatTime(TimeSpan t) => DateTime.Today.Add(t).ToString("h:mm tt");
+}

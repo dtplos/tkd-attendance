@@ -1,0 +1,48 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Identity
+@using TkdAttendance.Models
+@inject SignInManager<ApplicationUser> SignInManager
+@inject NavigationManager Nav
+
+<div class="auth-shell">
+    <div class="auth-card">
+        <h3>Log in</h3>
+
+        <EditForm Model="Input" method="post" OnValidSubmit="LoginUser" FormName="login">
+            <DataAnnotationsValidator />
+
+            <div class="mb-3">
+                <label for="email">Email</label>
+                <InputText id="email" class="form-control" autocomplete="username" @bind-Value="Input.Email" />
+            </div>
+
+            <div class="mb-3">
+                <label for="password">Password</label>
+                <InputText id="password" type="password" class="form-control" autocomplete="current-password" @bind-Value="Input.Password" />
+            </div>
+
+            <button class="btn btn-primary w-100" type="submit">Log in</button>
+            <ValidationSummary class="mt-3" role="alert" />
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromForm]
+    private InputModel Input { get; set; } = new();
+
+    private async Task LoginUser()
+    {
+        var result = await SignInManager.PasswordSignInAsync(Input.Email, Input.Password, isPersistent: true, lockoutOnFailure: false);
+        if (result.Succeeded)
+            Nav.NavigateTo("/", forceLoad: true);
+    }
+
+    private class InputModel
+    {
+        public string Email { get; set; } = "";
+        public string Password { get; set; } = "";
+    }
+}
