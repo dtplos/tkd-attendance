@@ -57,7 +57,8 @@
             <th scope="col">ID number</th>
             <th scope="col">Belt</th>
             <th scope="col">Class</th>
-            <th scope="col">Membership expires</th>
+            <th scope="col">Membership</th>
+            <th scope="col">Renewal Date</th>
             <th scope="col">Actions</th>
         </tr>
     </thead>
@@ -68,13 +69,14 @@
                 <td>@s.Name</td>
                 <td class="num">@(s.Age?.ToString() ?? "-")</td>
                 <td>@(s.IdNumber ?? "-")</td>
-                <td><span class="belt-dot" style="background:@BeltColor(s.Belt)"></span>@s.Belt</td>
+                <td><span class="belt-dot" style="--c1:@BeltColor(s.Belt).C1; --c2:@BeltColor(s.Belt).C2;"></span>@s.Belt</td>
                 <td>@(s.ClassDefinition is null ? "-" : $"{s.ClassDefinition.Name} ({s.ClassDefinition.DayOfWeek})")</td>
+                <td>@(s.Memberships.OrderByDescending(m => m.ExpiryDate).FirstOrDefault()?.Type.ToString() ?? "-")</td>
                 <td class="num">@(s.Memberships.OrderByDescending(m => m.ExpiryDate).FirstOrDefault()?.ExpiryDate.ToShortDateString() ?? "-")</td>
                 <td>
                     <a href="/students/@s.Id/edit">Edit</a>
                     &nbsp;|&nbsp;
-                    <a href="/students/@s.Id/membership">Membership</a>
+                    <a href="/students/@s.Id/membership">Renew</a>
                 </td>
             </tr>
         }
@@ -196,7 +198,7 @@
         await LoadStudents();
     }
 
-    private static string BeltColor(BeltRank belt) => belt switch
+    @* private static string BeltColor(BeltRank belt) => belt switch
     {
         BeltRank.White => "#FFFFFF",
         BeltRank.Yellow => "#F5D90A",
@@ -205,5 +207,21 @@
         BeltRank.Red => "#C8102E",
         BeltRank.Black => "#1B1B1B",
         _ => "#CCCCCC"
-    };
+    }; *@
+
+    private static (string C1, string C2) BeltColor(BeltRank belt) => belt switch
+{
+    BeltRank.White => ("#FFFFFF", "#FFFFFF"),
+    BeltRank.YellowTip => ("#FFFFFF", "#F5D90A"),
+    BeltRank.Yellow => ("#F5D90A", "#F5D90A"),
+    BeltRank.GreenTip => ("#F5D90A", "#2E8B37"),
+    BeltRank.Green => ("#2E8B37", "#2E8B37"),
+    BeltRank.BlueTip => ("#2E8B37", "#1D5FAE"),
+    BeltRank.Blue => ("#1D5FAE", "#1D5FAE"),
+    BeltRank.RedTip => ("#1D5FAE", "#C8102E"),
+    BeltRank.Red => ("#C8102E", "#C8102E"),
+    BeltRank.BlackTip => ("#C8102E", "#1B1B1B"),
+    BeltRank.Black => ("#1B1B1B", "#1B1B1B"),
+    _ => ("#CCCCCC", "#CCCCCC")
+};
 }
