@@ -1,2 +1,213 @@
 @* Under Construction *@
 
+@page "/timetable"
+@rendermode InteractiveServer 
+@using System.Collections.Immutable
+@using System.Runtime.CompilerServices
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@inject AppDbContext Db
+@inject ICurrentUserService CurrentUser
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+
+
+<h3> TimeTable</h3>
+<p> This is my Timetable page </p>
+<p> Current Branch ID: @selectedBranchId </p>
+
+@if (CurrentUser.IsSuperAdmin)
+{
+    <label for="branch">Branch:</label>
+     <select id="branch" @bind="selectedBranchId" @bind:after="LoadAsync">
+        @foreach (var branch in branches)
+        {
+            <option value="@branch.Id">@branch.Name</option>
+        }
+    </select>
+}
+
+@if (classes.Count == 0)
+{
+    <p> There is no Class </p>
+} 
+else
+{
+    <p> Classes detected </p>
+    <ul>
+        @foreach (var c in classes)
+        {
+            <li>
+                @c.Name - @c.DayOfWeek - @c.StartTime
+            </li>
+        }
+    </ul>
+    <p>Branch: @branchName: @classes.Count classes loaded.</p>
+}
+
+<div>
+    <button @onclick="() => ShiftWeek(-1)">
+        ← Previous Week
+    </button>
+
+    <button @onclick="() => weekStart = StartOfWeek(DateTime.Today)">
+        This Week
+    </button>
+
+    <button @onclick="() => ShiftWeek(1)">
+        Next Week → 
+    </button>
+</div>
+<ul>
+    @foreach (var date in WeekDates)
+    {
+        <li>
+            @date.ToString("dddd dd MMM")
+        </li>
+    }
+</ul>
+
+<h4>Hours</h4>
+    <ul>
+        @foreach (var hour in Hours)
+        {
+            <li>@hour:00</li>
+        }
+</ul>
+
+<table>
+    <thead>
+        <tr>
+            <th>Time</th>
+
+            @foreach (var date in WeekDates)
+            {
+                <th>
+                    @* @date.ToString("ddd dd") *@
+                    @date.ToString("ddd")
+                </th>
+            }
+        </tr>
+    </thead>
+
+
+    <tbody>
+        @foreach (var hour in Hours)
+        {
+            <tr>
+                <td>@hour:00</td>
+                @foreach (var date in WeekDates)
+                {
+                    <td>
+                        @foreach (var c in slots[(date.DayOfWeek, hour)])
+                        {
+                            <div>
+                                @c.Name
+                            </div>
+                        }
+                    </td>
+                }
+            </tr>
+        }
+    </tbody>
+</table>
+
+
+@code{
+    private List<Branch> branches = new();
+    private List<ClassDefinition> classes = new();
+    private int selectedBranchId;
+    private string? branchName;
+    private DateTime weekStart = StartOfWeek(DateTime.Today); //start from Tue
+    private int firstHour, lastHour;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated != true)
+        {
+            Nav.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+
+        if (CurrentUser.IsSuperAdmin)
+        {
+            branches = await Db.Branches.AsNoTracking().ToListAsync();
+            selectedBranchId = branches.FirstOrDefault()?.Id ?? 0;
+        }
+        else
+        {
+            selectedBranchId = CurrentUser.BranchId ?? 0;
+        }
+        await LoadAsync();
+    }
+    private async Task LoadAsync()
+    {
+        var branch = await Db.Branches.
+        AsNoTracking().
+        FirstOrDefaultAsync(b => b.Id == selectedBranchId);
+
+        // extract class
+        branchName = branch?.Name;
+        classes = await Db.ClassDefinitions
+                .Where(c => c.BranchId == selectedBranchId)
+                .AsNoTracking()
+                .ToListAsync();
+
+        // first, last class calculation
+        if (classes.Count > 0)
+        {
+            firstHour = classes.Min(c => c.StartTime.Hours);
+            lastHour = classes.Max(c => c.StartTime.Hours);
+        } else
+        {
+            firstHour = 0;
+            lastHour = -1;
+        }
+
+        // organisation of calendar slot: day: class's hour
+        slots = classes.ToLookup(
+            c => (c.DayOfWeek, c.StartTime.Hours)
+        );
+    }
+
+    private static DateTime StartOfWeek(DateTime date)
+    {
+        // formula: date.Date.AddDays(-(((int)date.DayOfWeek + 5) % 7));
+        var date_without_time = date.Date;
+
+        var day_ofWeek = date_without_time.DayOfWeek;
+        var day_number = (int)day_ofWeek;
+        var days_from_tue = (day_number + 5) % 7;
+
+        // Monday: goes to next week
+        if (date.DayOfWeek == DayOfWeek.Monday)
+        {
+            return date.Date.AddDays(1);
+        }
+
+        return date_without_time.AddDays(-days_from_tue);
+    }
+
+    // 6 days calendar
+    private IEnumerable<DateTime> WeekDates =>
+        Enumerable.Range(0, 6)
+        .Select(i => weekStart.AddDays(i));
+    
+    private IEnumerable<int> Hours =>
+    classes.Count == 0
+        ? Enumerable.Empty<int>()
+        : Enumerable.Range(firstHour, lastHour - firstHour + 1);
+
+    // switching week by tue
+    private void ShiftWeek(int weeks)
+    {
+        weekStart = weekStart.AddDays(7 * weeks);
+    }
+
+    // group classes by day and starting hour
+    private ILookup<(DayOfWeek Day, int Hour), ClassDefinition> slots =
+    new List<ClassDefinition>().ToLookup(
+        c => (c.DayOfWeek, c.StartTime.Hours)
+    );
+}
