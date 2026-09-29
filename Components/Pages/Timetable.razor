@@ -1,9 +1,5 @@
-@* Under Construction *@
-
 @page "/timetable"
-@rendermode InteractiveServer 
-@using System.Collections.Immutable
-@using System.Runtime.CompilerServices
+@rendermode InteractiveServer
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
 @inject AppDbContext Db
@@ -11,115 +7,111 @@
 @inject NavigationManager Nav
 @inject AuthenticationStateProvider AuthProvider
 
+<h3>Timetable</h3>
 
-<h3> TimeTable</h3>
-<p> This is my Timetable page </p>
-<p> Current Branch ID: @selectedBranchId </p>
-
-@if (CurrentUser.IsSuperAdmin)
-{
-    <label for="branch">Branch:</label>
-     <select id="branch" @bind="selectedBranchId" @bind:after="LoadAsync">
-        @foreach (var branch in branches)
+<div class="timetable-card">
+    <div class="timetable-toolbar">
+        @if (CurrentUser.IsSuperAdmin)
         {
-            <option value="@branch.Id">@branch.Name</option>
-        }
-    </select>
-}
-
-@if (classes.Count == 0)
-{
-    <p> There is no Class </p>
-} 
-else
-{
-    <p> Classes detected </p>
-    <ul>
-        @foreach (var c in classes)
-        {
-            <li>
-                @c.Name - @c.DayOfWeek - @c.StartTime
-            </li>
-        }
-    </ul>
-    <p>Branch: @branchName: @classes.Count classes loaded.</p>
-}
-
-<div>
-    <button @onclick="() => ShiftWeek(-1)">
-        ← Previous Week
-    </button>
-
-    <button @onclick="() => weekStart = StartOfWeek(DateTime.Today)">
-        This Week
-    </button>
-
-    <button @onclick="() => ShiftWeek(1)">
-        Next Week → 
-    </button>
-</div>
-<ul>
-    @foreach (var date in WeekDates)
-    {
-        <li>
-            @date.ToString("dddd dd MMM")
-        </li>
-    }
-</ul>
-
-<h4>Hours</h4>
-    <ul>
-        @foreach (var hour in Hours)
-        {
-            <li>@hour:00</li>
-        }
-</ul>
-
-<table>
-    <thead>
-        <tr>
-            <th>Time</th>
-
-            @foreach (var date in WeekDates)
-            {
-                <th>
-                    @* @date.ToString("ddd dd") *@
-                    @date.ToString("ddd")
-                </th>
-            }
-        </tr>
-    </thead>
-
-
-    <tbody>
-        @foreach (var hour in Hours)
-        {
-            <tr>
-                <td>@hour:00</td>
-                @foreach (var date in WeekDates)
+            <select aria-label="Branch" @bind="selectedBranchId" @bind:after="LoadAsync">
+                @foreach (var branch in branches)
                 {
-                    <td>
-                        @foreach (var c in slots[(date.DayOfWeek, hour)])
-                        {
-                            <div>
-                                @c.Name
-                            </div>
-                        }
-                    </td>
+                    <option value="@branch.Id">@branch.Name</option>
                 }
-            </tr>
+            </select>
         }
-    </tbody>
-</table>
+        else
+        {
+            <span class="timetable-branch">@branchName</span>
+        }
 
+        <div class="timetable-nav">
+            <button type="button" aria-label="Previous week" @onclick="() => ShiftWeek(-1)">&larr;</button>
+            <span class="timetable-range">@WeekRangeLabel</span>
+            <button type="button" aria-label="Next week" @onclick="() => ShiftWeek(1)">&rarr;</button>
+            <button type="button" class="this-week" @onclick="GoToThisWeek">This week</button>
+        </div>
+    </div>
 
-@code{
+    @if (classes.Count == 0)
+    {
+        <p class="text-muted timetable-empty">
+            No classes set up for this branch yet. Add them on the <a href="/classes">class schedule</a> page.
+        </p>
+    }
+    else
+    {
+        <div class="timetable-scroll">
+            <table class="timetable-grid" aria-label="Weekly timetable for @branchName">
+                <thead>
+                    <tr>
+                        <th></th>
+                        @foreach (var date in WeekDates)
+                        {
+                            var isToday = date.Date == DateTime.Today;
+                            <th class="@(isToday ? "today" : null)">
+                                @date.ToString("ddd")
+                                <span class="date">@date.ToString("d MMM")</span>
+                                @if (isToday)
+                                {
+                                    <div class="today-bar"></div>
+                                }
+                            </th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var hour in Hours)
+                    {
+                        <tr>
+                            <th scope="row">@FormatHour(hour)</th>
+                            @foreach (var date in WeekDates)
+                            {
+                                <td>
+                                    @foreach (var c in slots[(date.DayOfWeek, hour)])
+                                    {
+                                        <div class="slot @SlotClass(c.Name)">
+                                            <div class="slot-name">@c.Name</div>
+                                            <div class="slot-time">@FormatTime(c.StartTime)–@FormatTime(c.EndTime)</div>
+                                        </div>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <div class="timetable-legend">
+            <span><span class="legend-dot legend-regular"></span>Regular class</span>
+            <span><span class="legend-dot legend-special"></span>Special / one-off</span>
+            <span><span class="legend-dot legend-graded"></span>Graded (red belt and up)</span>
+        </div>
+    }
+</div>
+
+@code {
     private List<Branch> branches = new();
     private List<ClassDefinition> classes = new();
     private int selectedBranchId;
     private string? branchName;
-    private DateTime weekStart = StartOfWeek(DateTime.Today); //start from Tue
+    private DateTime weekStart = StartOfWeek(DateTime.Today);
     private int firstHour, lastHour;
+
+    private ILookup<(DayOfWeek Day, int Hour), ClassDefinition> slots =
+        new List<ClassDefinition>().ToLookup(c => (c.DayOfWeek, c.StartTime.Hours));
+
+    private IEnumerable<DateTime> WeekDates =>
+        Enumerable.Range(0, 6).Select(i => weekStart.AddDays(i));
+
+    private IEnumerable<int> Hours =>
+        classes.Count == 0
+            ? Enumerable.Empty<int>()
+            : Enumerable.Range(firstHour, lastHour - firstHour + 1);
+
+    private string WeekRangeLabel =>
+        $"{weekStart:d MMM} \u2013 {weekStart.AddDays(5):d MMM yyyy}";
 
     protected override async Task OnInitializedAsync()
     {
@@ -139,75 +131,72 @@ else
         {
             selectedBranchId = CurrentUser.BranchId ?? 0;
         }
+
         await LoadAsync();
     }
+
     private async Task LoadAsync()
     {
-        var branch = await Db.Branches.
-        AsNoTracking().
-        FirstOrDefaultAsync(b => b.Id == selectedBranchId);
-
-        // extract class
+        var branch = await Db.Branches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == selectedBranchId);
         branchName = branch?.Name;
-        classes = await Db.ClassDefinitions
-                .Where(c => c.BranchId == selectedBranchId)
-                .AsNoTracking()
-                .ToListAsync();
 
-        // first, last class calculation
+        classes = await Db.ClassDefinitions
+            .Where(c => c.BranchId == selectedBranchId)
+            .AsNoTracking()
+            .ToListAsync();
+
         if (classes.Count > 0)
         {
             firstHour = classes.Min(c => c.StartTime.Hours);
             lastHour = classes.Max(c => c.StartTime.Hours);
-        } else
+        }
+        else
         {
             firstHour = 0;
             lastHour = -1;
         }
 
-        // organisation of calendar slot: day: class's hour
-        slots = classes.ToLookup(
-            c => (c.DayOfWeek, c.StartTime.Hours)
-        );
+        slots = classes.ToLookup(c => (c.DayOfWeek, c.StartTime.Hours));
     }
 
     private static DateTime StartOfWeek(DateTime date)
     {
-        // formula: date.Date.AddDays(-(((int)date.DayOfWeek + 5) % 7));
-        var date_without_time = date.Date;
-
-        var day_ofWeek = date_without_time.DayOfWeek;
-        var day_number = (int)day_ofWeek;
-        var days_from_tue = (day_number + 5) % 7;
-
-        // Monday: goes to next week
-        if (date.DayOfWeek == DayOfWeek.Monday)
+        var day = date.Date;
+        if (day.DayOfWeek == DayOfWeek.Monday)
         {
-            return date.Date.AddDays(1);
+            return day.AddDays(1);
         }
-
-        return date_without_time.AddDays(-days_from_tue);
+        return day.AddDays(-(((int)day.DayOfWeek + 5) % 7));
     }
 
-    // 6 days calendar
-    private IEnumerable<DateTime> WeekDates =>
-        Enumerable.Range(0, 6)
-        .Select(i => weekStart.AddDays(i));
-    
-    private IEnumerable<int> Hours =>
-    classes.Count == 0
-        ? Enumerable.Empty<int>()
-        : Enumerable.Range(firstHour, lastHour - firstHour + 1);
+    private void ShiftWeek(int weeks) => weekStart = weekStart.AddDays(7 * weeks);
 
-    // switching week by tue
-    private void ShiftWeek(int weeks)
+    private void GoToThisWeek() => weekStart = StartOfWeek(DateTime.Today);
+
+    private static string FormatHour(int hour) => DateTime.Today.AddHours(hour).ToString("h tt");
+
+    private static string FormatTime(TimeSpan time) => DateTime.Today.Add(time).ToString("h:mm tt");
+
+    @* private static string SlotClass(string name)
     {
-        weekStart = weekStart.AddDays(7 * weeks);
-    }
+        // color coding class initiation
+        if (name.Contains("competition", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("demo", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("poomsae", StringComparison.OrdinalIgnoreCase))
+            return "slot-special";
 
-    // group classes by day and starting hour
-    private ILookup<(DayOfWeek Day, int Hour), ClassDefinition> slots =
-    new List<ClassDefinition>().ToLookup(
-        c => (c.DayOfWeek, c.StartTime.Hours)
-    );
+        if (name.Contains("red", StringComparison.OrdinalIgnoreCase))
+            return "slot-graded";
+
+        return "slot-regular";
+    } *@
+
+    private static string SlotClass(string name) =>
+        name.Contains("tiny", StringComparison.OrdinalIgnoreCase) ? "slot-tiny" :
+        name.Contains("kids", StringComparison.OrdinalIgnoreCase) ? "slot-kids" :
+        name.Contains("teens", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("adult", StringComparison.OrdinalIgnoreCase) ? "slot-teens" :
+        name.Contains("family", StringComparison.OrdinalIgnoreCase) ? "slot-family" :
+        name.Contains("diamond", StringComparison.OrdinalIgnoreCase) ? "slot-diamond" :
+    "slot-regular";
 }
