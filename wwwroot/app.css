@@ -269,7 +269,7 @@ label { font-size: .875rem; font-weight: 500; color: var(--muted); margin-bottom
 .slot-kids { background: #88C6A9; color: #000; }
 .slot-teens { background: #A3A3A3; color: #000; }
 .slot-family { background: #5894DC; color: #000; }
-.slot-diamond { background: }
+.slot-diamond { background: #C99AEB; color: #000;}
 .slot-regular { background:  lightgrey; color: #000; }
 
 .timetable-legend {
