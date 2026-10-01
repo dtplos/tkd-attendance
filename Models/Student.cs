@@ -1,6 +1,6 @@
 namespace TkdAttendance.Models;
 
-public enum BeltRank { White, Yellow, Green, Blue, Red, Black }
+public enum BeltRank { White, YellowTip, Yellow, GreenTip, Green, BlueTip, Blue, RedTip, Red, BlackTip, Black }
 
 public class Student
 {
